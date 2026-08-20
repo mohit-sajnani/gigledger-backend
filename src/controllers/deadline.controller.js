@@ -1,6 +1,6 @@
 const Deadline = require('../models/Deadline');
 const User = require('../models/User');
-const { sendDeadlineReminderEmail } = require('../services/mailer.service');
+const mailer = require('../services/mailer.service');
 const logger = require('../utils/logger');
 const asyncHandler = require('../utils/asyncHandler');
 
@@ -51,7 +51,7 @@ const notifyDueDeadlines = asyncHandler(async (req, res) => {
     const daysRemaining = Math.max(0, Math.ceil((deadline.dueDate - Date.now()) / MS_PER_DAY));
 
     try {
-      await sendDeadlineReminderEmail(user.email, {
+      await mailer.sendDeadlineReminderEmail(user.email, {
         label: deadline.label,
         dueDate: deadline.dueDate,
         daysRemaining,
