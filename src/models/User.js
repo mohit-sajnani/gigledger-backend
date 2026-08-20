@@ -19,6 +19,7 @@ const userSchema = new Schema(
     passwordHash: { type: String, required: true, select: false },
     platformsLinked: { type: [String], default: [] },
     taxProfile: { type: Schema.Types.Mixed, default: {} },
+    twoFactorEnabled: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
