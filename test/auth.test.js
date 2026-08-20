@@ -170,6 +170,7 @@ test('POST /api/auth/2fa/verify issues a token for a correct, unused, unexpired 
     userId,
     codeHash,
     used: false,
+    attempts: 0,
     expiresAt: new Date(Date.now() + 60_000),
     save: async function save() {},
   };
@@ -194,6 +195,7 @@ test('POST /api/auth/2fa/verify rejects a wrong code with a generic 401', async 
     userId: new mongoose.Types.ObjectId(),
     codeHash: await bcrypt.hash('123456', 10),
     used: false,
+    attempts: 0,
     expiresAt: new Date(Date.now() + 60_000),
     save: async function save() {},
   });
@@ -204,6 +206,52 @@ test('POST /api/auth/2fa/verify rejects a wrong code with a generic 401', async 
 
   assert.equal(res.status, 401);
   assert.equal(res.body.message, 'Invalid or expired code');
+});
+
+test('POST /api/auth/2fa/verify rejects even the correct code once attempts are exhausted', async () => {
+  const app = buildApp();
+  const bcrypt = require('bcryptjs');
+  const sessionId = new mongoose.Types.ObjectId();
+  const session = {
+    _id: sessionId,
+    userId: new mongoose.Types.ObjectId(),
+    codeHash: await bcrypt.hash('123456', 10),
+    used: false,
+    attempts: 5,
+    expiresAt: new Date(Date.now() + 60_000),
+    save: async function save() {},
+  };
+  OtpSession.findById = async () => session;
+
+  const res = await request(app)
+    .post('/api/auth/2fa/verify')
+    .send({ pendingSessionId: sessionId.toString(), code: '123456' });
+
+  assert.equal(res.status, 401);
+});
+
+test('POST /api/auth/2fa/verify locks the session out on the 5th wrong guess', async () => {
+  const app = buildApp();
+  const bcrypt = require('bcryptjs');
+  const sessionId = new mongoose.Types.ObjectId();
+  const session = {
+    _id: sessionId,
+    userId: new mongoose.Types.ObjectId(),
+    codeHash: await bcrypt.hash('123456', 10),
+    used: false,
+    attempts: 4,
+    expiresAt: new Date(Date.now() + 60_000),
+    save: async function save() {},
+  };
+  OtpSession.findById = async () => session;
+
+  const res = await request(app)
+    .post('/api/auth/2fa/verify')
+    .send({ pendingSessionId: sessionId.toString(), code: '000000' });
+
+  assert.equal(res.status, 401);
+  assert.equal(session.attempts, 5);
+  assert.equal(session.used, true);
 });
 
 test('POST /api/auth/2fa/verify rejects an already-used code', async () => {

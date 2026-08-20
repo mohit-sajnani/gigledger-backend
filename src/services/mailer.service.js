@@ -3,10 +3,15 @@ const nodemailer = require('nodemailer');
 /**
  * Sends the raw OTP by email. Without SMTP creds configured (local dev,
  * CI, tests) this just logs the code instead of failing — the login
- * flow stays fully testable with zero real infrastructure.
+ * flow stays fully testable with zero real infrastructure. In
+ * production that fallback is refused outright: logging a live login
+ * code to stdout would be a silent 2FA bypass for anyone with log access.
  */
 const sendOtpEmail = async (toEmail, code) => {
   if (!process.env.SMTP_HOST) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('SMTP_HOST is not configured — refusing to send OTP in production');
+    }
     console.log(`[mailer] OTP for ${toEmail}: ${code}`);
     return;
   }

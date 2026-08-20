@@ -8,6 +8,7 @@ const mailer = require('../services/mailer.service');
 
 const PASSWORD_SALT_ROUNDS = 10;
 const OTP_TTL_MS = 5 * 60 * 1000;
+const OTP_MAX_ATTEMPTS = 5;
 
 const INVALID_OTP_RESPONSE = {
   success: false,
@@ -124,10 +125,27 @@ const verifyTwoFactor = asyncHandler(async (req, res) => {
   const { pendingSessionId, code } = req.body;
   const otpSession = await OtpSession.findById(pendingSessionId);
 
-  const isUsable = otpSession && !otpSession.used && otpSession.expiresAt > new Date();
-  const codeMatches = isUsable && (await bcrypt.compare(code, otpSession.codeHash));
+  const isUsable =
+    otpSession &&
+    !otpSession.used &&
+    otpSession.expiresAt > new Date() &&
+    otpSession.attempts < OTP_MAX_ATTEMPTS;
 
-  if (!codeMatches) {
+  // Always run bcrypt, even on a dead session, so response time can't be
+  // used to tell "wrong code" apart from "expired/used/locked session".
+  const codeMatches = await bcrypt.compare(
+    code,
+    isUsable ? otpSession.codeHash : DUMMY_PASSWORD_HASH
+  );
+
+  if (!isUsable || !codeMatches) {
+    // Count the guess against a still-live session so repeated wrong
+    // codes lock it out well before the 5-minute TTL would.
+    if (otpSession && !otpSession.used && otpSession.expiresAt > new Date()) {
+      otpSession.attempts += 1;
+      if (otpSession.attempts >= OTP_MAX_ATTEMPTS) otpSession.used = true;
+      await otpSession.save();
+    }
     return res.status(401).json(INVALID_OTP_RESPONSE);
   }
 
