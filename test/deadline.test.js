@@ -40,7 +40,7 @@ test('syncDeadlines never recomputes status for a deadline already marked comple
     save: async function save() {},
   };
 
-  Deadline.findOne = async () => completedDeadline;
+  Deadline.findOneAndUpdate = async () => completedDeadline;
   let taxEstimateQueried = false;
   TaxEstimate.findOne = async () => {
     taxEstimateQueried = true;
@@ -58,7 +58,7 @@ test('syncDeadlines pulls estimatedAmount from the correctly-shaped TaxEstimate 
   const deadlineDoc = { status: 'upcoming', save: async function save() {} };
   let queriedPeriod;
 
-  Deadline.findOne = async (filter) => {
+  Deadline.findOneAndUpdate = async (filter) => {
     if (filter.label === 'Q1 Advance Tax') return deadlineDoc;
     return { status: 'upcoming', save: async function save() {} };
   };
@@ -137,6 +137,7 @@ test('applyApprovedTask resolves a deadline_check task via AuditLog without touc
 
   let auditLogCreated;
   let transactionQueried = false;
+  Deadline.findOne = () => ({ session: () => Promise.resolve({ _id: deadlineId, userId }) });
   AuditLog.create = async (docs) => {
     auditLogCreated = docs[0];
     return [{ ...docs[0], _id: new mongoose.Types.ObjectId() }];
@@ -153,6 +154,31 @@ test('applyApprovedTask resolves a deadline_check task via AuditLog without touc
   assert.equal(auditLogCreated.targetModel, 'Deadline');
   assert.equal(auditLogCreated.targetId, deadlineId);
   assert.equal(transactionQueried, false, 'a deadline_check approval must never query Transaction');
+});
+
+test('applyApprovedTask rejects a deadline_check task whose Deadline no longer exists', async () => {
+  const userId = new mongoose.Types.ObjectId();
+  const taskId = new mongoose.Types.ObjectId();
+  const deadlineId = new mongoose.Types.ObjectId();
+
+  const task = {
+    _id: taskId,
+    userId,
+    status: 'proposed',
+    type: 'deadline_check',
+    inputRefs: [],
+    proposedChange: { deadlineId, action: 'acknowledge' },
+  };
+
+  Deadline.findOne = () => ({ session: () => Promise.resolve(null) });
+  let auditLogCreated = false;
+  AuditLog.create = async () => {
+    auditLogCreated = true;
+    return [{}];
+  };
+
+  await assert.rejects(() => applyApprovedTask(task, {}), /Deadline referenced by this task no longer exists/);
+  assert.equal(auditLogCreated, false, 'no AuditLog should be written when the Deadline is gone');
 });
 
 test('GET /api/deadlines/:id returns 404 for a non-owned or nonexistent deadline', async () => {
