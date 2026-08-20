@@ -5,6 +5,7 @@ const {
   verifyRegistration,
   login,
   verifyLogin,
+  resendOtp,
   refresh,
 } = require('../controllers/auth.controller');
 
@@ -48,6 +49,7 @@ router.post('/register', validateRegister, register);
 router.post('/register/verify', validateRegisterVerify, verifyRegistration);
 router.post('/login', validateLogin, login);
 router.post('/login/verify', validateLoginVerify, verifyLogin);
+router.post('/resend-otp', [pendingSessionIdValidator(), runValidation], resendOtp);
 router.post('/refresh', refresh);
 
 module.exports = router;
