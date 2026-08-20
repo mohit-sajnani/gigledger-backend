@@ -212,6 +212,11 @@ const RESEND_OTP_RESPONSE_MESSAGE = 'If that code is still valid, a new one has 
  * telling the caller why — same enumeration-safe discipline as redeemOtp.
  * Never touches `attempts`: a resend isn't a guess, so it must not refresh
  * an otherwise near-exhausted brute-force budget.
+ *
+ * Always pays the same hashing cost on both branches (real code on the
+ * resendable path, a throwaway one otherwise) so response timing can't be
+ * used to tell a live pendingSessionId from a dead one — same idea as
+ * redeemOtp's DUMMY_CODE_HASH compare, applied to the hash side here.
  */
 const resendOtp = asyncHandler(async (req, res) => {
   const { pendingSessionId } = req.body;
@@ -224,9 +229,11 @@ const resendOtp = asyncHandler(async (req, res) => {
     otpSession.attempts < OTP_MAX_ATTEMPTS &&
     otpSession.resendCount < OTP_MAX_RESENDS;
 
+  const code = crypto.randomInt(100000, 1000000).toString();
+  const codeHash = await hashOtpCode(code);
+
   if (isResendable) {
-    const code = crypto.randomInt(100000, 1000000).toString();
-    otpSession.codeHash = await hashOtpCode(code);
+    otpSession.codeHash = codeHash;
     otpSession.expiresAt = new Date(Date.now() + OTP_TTL_MS);
     otpSession.resendCount += 1;
     await otpSession.save();
