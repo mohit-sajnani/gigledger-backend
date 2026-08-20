@@ -32,6 +32,7 @@ const fakeSession = (overrides = {}) => ({
   purpose: 'register',
   used: false,
   attempts: 0,
+  resendCount: 0,
   expiresAt: new Date(Date.now() + 60_000),
   save: async function save() {},
   ...overrides,
@@ -284,6 +285,73 @@ test('a register-purpose code cannot be redeemed at /login/verify', async () => 
   });
 
   assert.equal(res.status, 401);
+});
+
+test('POST /api/auth/resend-otp sends a new code and updates the session, without touching attempts', async () => {
+  const app = buildApp();
+  const session = fakeSession({ purpose: 'login', email: 'asha@example.com', attempts: 2, resendCount: 0 });
+  let savedSession;
+  let mailedTo;
+  let mailedPurpose;
+
+  session.save = async function save() {
+    savedSession = { ...this };
+  };
+  OtpSession.findById = async () => session;
+  mailer.sendOtpEmail = async (toEmail, code, purpose) => {
+    mailedTo = toEmail;
+    mailedPurpose = purpose;
+  };
+
+  const res = await request(app)
+    .post('/api/auth/resend-otp')
+    .send({ pendingSessionId: session._id.toString() });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.pendingSessionId, session._id.toString());
+  assert.equal(mailedTo, 'asha@example.com');
+  assert.equal(mailedPurpose, 'login');
+  assert.equal(session.resendCount, 1);
+  assert.equal(session.attempts, 2);
+  assert.ok(savedSession);
+});
+
+test('POST /api/auth/resend-otp silently no-ops for a used/expired/attempt-capped session', async () => {
+  const app = buildApp();
+  let mailSent = false;
+  mailer.sendOtpEmail = async () => {
+    mailSent = true;
+  };
+
+  OtpSession.findById = async () => fakeSession({ used: true });
+
+  const res = await request(app)
+    .post('/api/auth/resend-otp')
+    .send({ pendingSessionId: new mongoose.Types.ObjectId().toString() });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.message, 'If that code is still valid, a new one has been sent');
+  assert.equal(mailSent, false);
+});
+
+test('POST /api/auth/resend-otp silently no-ops once the resend cap is hit', async () => {
+  const app = buildApp();
+  const session = fakeSession({ resendCount: 3 });
+  let mailSent = false;
+
+  session.save = async function save() {};
+  OtpSession.findById = async () => session;
+  mailer.sendOtpEmail = async () => {
+    mailSent = true;
+  };
+
+  const res = await request(app)
+    .post('/api/auth/resend-otp')
+    .send({ pendingSessionId: session._id.toString() });
+
+  assert.equal(res.status, 200);
+  assert.equal(mailSent, false);
+  assert.equal(session.resendCount, 3);
 });
 
 test('protect rejects requests with no Authorization header', async () => {
