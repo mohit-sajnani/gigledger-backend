@@ -7,6 +7,7 @@ const mongoose = require('mongoose');
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
 process.env.JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
+process.env.INTERNAL_CRON_SECRET = process.env.INTERNAL_CRON_SECRET || 'test-cron-secret';
 
 const Deadline = require('../src/models/Deadline');
 const User = require('../src/models/User');
@@ -51,6 +52,17 @@ test('GET /api/deadlines only queries deadlines scoped to the requesting user', 
   assert.equal(queriedFilter.userId, userId);
 });
 
+test('POST /api/deadlines/notify rejects a request authenticated only as a regular user, no internal secret', async () => {
+  const app = buildApp();
+
+  const res = await request(app)
+    .post('/api/deadlines/notify')
+    .set('Authorization', authHeader(new mongoose.Types.ObjectId().toString()))
+    .send({});
+
+  assert.equal(res.status, 401);
+});
+
 test('POST /api/deadlines/notify sends a reminder and marks the deadline notified', async () => {
   const app = buildApp();
   const deadline = fakeDeadline();
@@ -70,7 +82,7 @@ test('POST /api/deadlines/notify sends a reminder and marks the deadline notifie
 
   const res = await request(app)
     .post('/api/deadlines/notify')
-    .set('Authorization', authHeader(user._id.toString()))
+    .set('X-Internal-Secret', process.env.INTERNAL_CRON_SECRET)
     .send({});
 
   assert.equal(res.status, 200);
@@ -88,7 +100,7 @@ test('POST /api/deadlines/notify does not re-send once a deadline is already not
 
   const res = await request(app)
     .post('/api/deadlines/notify')
-    .set('Authorization', authHeader(new mongoose.Types.ObjectId().toString()))
+    .set('X-Internal-Secret', process.env.INTERNAL_CRON_SECRET)
     .send({});
 
   assert.equal(res.status, 200);
@@ -114,7 +126,7 @@ test('POST /api/deadlines/notify keeps sending to other users after one send fai
 
   const res = await request(app)
     .post('/api/deadlines/notify')
-    .set('Authorization', authHeader(new mongoose.Types.ObjectId().toString()))
+    .set('X-Internal-Secret', process.env.INTERNAL_CRON_SECRET)
     .send({});
 
   assert.equal(res.status, 200);

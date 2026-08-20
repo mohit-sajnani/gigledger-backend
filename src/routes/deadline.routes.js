@@ -1,6 +1,6 @@
 const express = require('express');
 const { query, body, validationResult } = require('express-validator');
-const { protect } = require('../middleware/auth.middleware');
+const { protect, requireInternalSecret } = require('../middleware/auth.middleware');
 const { listDeadlines, notifyDueDeadlines } = require('../controllers/deadline.controller');
 
 const router = express.Router();
@@ -31,7 +31,7 @@ router.get(
 
 router.post(
   '/notify',
-  protect,
+  requireInternalSecret,
   [body('windowDays').optional().isInt({ min: 1, max: 30 }).withMessage('windowDays must be between 1 and 30')],
   checkValidation,
   notifyDueDeadlines,
