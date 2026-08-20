@@ -6,10 +6,12 @@ const User = require('../models/User');
 const OtpSession = require('../models/OtpSession');
 const asyncHandler = require('../utils/asyncHandler');
 const mailer = require('../services/mailer.service');
+const { hashOtpCode, compareOtpCode } = require('../utils/otpHash');
 
 const OTP_SALT_ROUNDS = 10;
 const OTP_TTL_MS = 5 * 60 * 1000;
 const OTP_MAX_ATTEMPTS = 5;
+const OTP_MAX_RESENDS = 3;
 
 const INVALID_OTP_RESPONSE = {
   success: false,
@@ -35,7 +37,7 @@ const shapeUser = (user) => ({
 
 const createOtpSession = async ({ purpose, email, userId, firstName, lastName }) => {
   const code = crypto.randomInt(100000, 1000000).toString();
-  const codeHash = await bcrypt.hash(code, OTP_SALT_ROUNDS);
+  const codeHash = await hashOtpCode(code);
   const otpSession = await OtpSession.create({
     purpose,
     email,
@@ -64,7 +66,7 @@ const redeemOtp = async (pendingSessionId, code, purpose) => {
     otpSession.expiresAt > new Date() &&
     otpSession.attempts < OTP_MAX_ATTEMPTS;
 
-  const codeMatches = await bcrypt.compare(
+  const codeMatches = await compareOtpCode(
     code,
     isUsable ? otpSession.codeHash : DUMMY_CODE_HASH
   );
@@ -203,6 +205,48 @@ const verifyLogin = asyncHandler(async (req, res) => {
   });
 });
 
+const RESEND_OTP_RESPONSE_MESSAGE = 'If that code is still valid, a new one has been sent';
+
+/**
+ * Silently no-ops on an unusable or resend-capped session instead of
+ * telling the caller why — same enumeration-safe discipline as redeemOtp.
+ * Never touches `attempts`: a resend isn't a guess, so it must not refresh
+ * an otherwise near-exhausted brute-force budget.
+ *
+ * Always pays the same hashing cost on both branches (real code on the
+ * resendable path, a throwaway one otherwise) so response timing can't be
+ * used to tell a live pendingSessionId from a dead one — same idea as
+ * redeemOtp's DUMMY_CODE_HASH compare, applied to the hash side here.
+ */
+const resendOtp = asyncHandler(async (req, res) => {
+  const { pendingSessionId } = req.body;
+  const otpSession = await OtpSession.findById(pendingSessionId);
+
+  const isResendable =
+    otpSession &&
+    !otpSession.used &&
+    otpSession.expiresAt > new Date() &&
+    otpSession.attempts < OTP_MAX_ATTEMPTS &&
+    otpSession.resendCount < OTP_MAX_RESENDS;
+
+  const code = crypto.randomInt(100000, 1000000).toString();
+  const codeHash = await hashOtpCode(code);
+
+  if (isResendable) {
+    otpSession.codeHash = codeHash;
+    otpSession.expiresAt = new Date(Date.now() + OTP_TTL_MS);
+    otpSession.resendCount += 1;
+    await otpSession.save();
+    await mailer.sendOtpEmail(otpSession.email, code, otpSession.purpose);
+  }
+
+  res.status(200).json({
+    success: true,
+    data: { pendingSessionId },
+    message: RESEND_OTP_RESPONSE_MESSAGE,
+  });
+});
+
 /**
  * Reissues an access token from a still-valid one. No refresh-token
  * store yet — this is a minimal reissue, not full rotation.
@@ -235,4 +279,4 @@ const refresh = asyncHandler(async (req, res) => {
   }
 });
 
-module.exports = { register, verifyRegistration, login, verifyLogin, refresh };
+module.exports = { register, verifyRegistration, login, verifyLogin, resendOtp, refresh };

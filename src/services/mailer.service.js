@@ -51,6 +51,12 @@ const otpEmailHtml = (heading, intro, code) => `
   </body>
 </html>`;
 
+const DEADLINE_EMAIL_COPY = {
+  subject: (label, daysRemaining) => `Reminder: ${label} is due in ${daysRemaining} day(s)`,
+  text: (label, dueDate, daysRemaining) =>
+    `${label} is due on ${dueDate.toDateString()} (${daysRemaining} day(s) from now). Log in to GigLedger to review it.`,
+};
+
 /**
  * Sends the raw OTP by email. Without SMTP creds configured (local dev,
  * CI, tests) this just logs the code instead of failing — the login
@@ -84,4 +90,34 @@ const sendOtpEmail = async (toEmail, code, purpose = 'login') => {
   });
 };
 
-module.exports = { sendOtpEmail };
+/**
+ * Same send-or-log-in-dev rule as sendOtpEmail, just for a plain
+ * heads-up email instead of a code — no verification step involved.
+ */
+const sendDeadlineReminderEmail = async (toEmail, { label, dueDate, daysRemaining }) => {
+  const subject = DEADLINE_EMAIL_COPY.subject(label, daysRemaining);
+  const text = DEADLINE_EMAIL_COPY.text(label, dueDate, daysRemaining);
+
+  if (!process.env.SMTP_HOST) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('SMTP_HOST is not configured — refusing to send deadline reminder in production');
+    }
+    console.log(`[mailer] Deadline reminder for ${toEmail}: ${text}`);
+    return;
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT) || 587,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  });
+
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM,
+    to: toEmail,
+    subject,
+    text,
+  });
+};
+
+module.exports = { sendOtpEmail, sendDeadlineReminderEmail };

@@ -30,4 +30,24 @@ const protect = (req, res, next) => {
   }
 };
 
-module.exports = { protect };
+/**
+ * Gate for system/cron-triggered actions that affect every user, not just
+ * the caller — a valid user JWT isn't the right check here, since any
+ * logged-in user would otherwise be able to trigger it. Requires a shared
+ * secret only the trusted caller (e.g. an external cron) knows.
+ */
+const requireInternalSecret = (req, res, next) => {
+  const provided = req.headers['x-internal-secret'];
+
+  if (!process.env.INTERNAL_CRON_SECRET || provided !== process.env.INTERNAL_CRON_SECRET) {
+    return res.status(401).json({
+      success: false,
+      message: 'Not authorized',
+      errors: [],
+    });
+  }
+
+  next();
+};
+
+module.exports = { protect, requireInternalSecret };
