@@ -3,6 +3,7 @@ const Transaction = require('../models/Transaction');
 const Category = require('../models/Category');
 const AgentTask = require('../models/AgentTask');
 const AuditLog = require('../models/AuditLog');
+const Deadline = require('../models/Deadline');
 const llm = require('../config/gemini');
 const logger = require('../utils/logger');
 
@@ -176,6 +177,15 @@ async function applyApprovedTask(task, session) {
   // deadline itself was already marked notified when the task was proposed.
   // We still write an AuditLog entry so every approved task leaves a trail.
   if (task.type === 'deadline_check') {
+    const deadline = await Deadline.findOne({
+      _id: task.proposedChange.deadlineId,
+      userId: task.userId,
+    }).session(session);
+
+    if (!deadline) {
+      throw new Error('Deadline referenced by this task no longer exists');
+    }
+
     const [auditLog] = await AuditLog.create(
       [
         {
