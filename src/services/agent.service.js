@@ -3,7 +3,7 @@ const Transaction = require('../models/Transaction');
 const Category = require('../models/Category');
 const AgentTask = require('../models/AgentTask');
 const AuditLog = require('../models/AuditLog');
-const openai = require('../config/openai');
+const llm = require('../config/gemini');
 const logger = require('../utils/logger');
 
 const SYSTEM_PROMPT = `You are a financial assistant for a gig worker (rider/delivery driver/freelancer).
@@ -95,7 +95,7 @@ async function plannerLLMCall(userId, transactions, categories) {
 
   let raw;
   try {
-    raw = await openai.chatJSON({ system: SYSTEM_PROMPT, user: userMessage });
+    raw = await llm.chatJSON({ system: SYSTEM_PROMPT, user: userMessage });
   } catch (err) {
     logger.error(`Planner LLM call failed: ${err.message}`);
     return [];

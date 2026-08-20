@@ -6,13 +6,13 @@ const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret';
-process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY || 'test-key';
+process.env.GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'test-key';
 
 const AgentTask = require('../src/models/AgentTask');
 const Transaction = require('../src/models/Transaction');
 const Category = require('../src/models/Category');
 const AuditLog = require('../src/models/AuditLog');
-const openai = require('../src/config/openai');
+const llm = require('../src/config/gemini');
 const agentRoutes = require('../src/routes/agent.routes');
 
 /** Minimal app: just the agent routes, no db.js/app.js dependency. */
@@ -68,7 +68,7 @@ test('POST /api/agent/run degrades gracefully when the LLM call fails, never a 5
   Transaction.find = () => ({ sort: () => ({ limit: async () => [txn] }) });
   AgentTask.find = () => ({ distinct: async () => [] });
   Category.find = async () => [];
-  openai.chatJSON = async () => {
+  llm.chatJSON = async () => {
     throw new Error('simulated OpenAI outage');
   };
 
@@ -106,7 +106,7 @@ test('POST /api/agent/run drops an LLM proposal that references a category never
   Transaction.find = () => ({ sort: () => ({ limit: async () => [txn] }) });
   AgentTask.find = () => ({ distinct: async () => [] });
   Category.find = async () => [category];
-  openai.chatJSON = async () =>
+  llm.chatJSON = async () =>
     JSON.stringify({
       tasks: [
         {
@@ -142,7 +142,7 @@ test('POST /api/agent/run persists a valid LLM proposal as a proposed AgentTask'
   Transaction.find = () => ({ sort: () => ({ limit: async () => [txn] }) });
   AgentTask.find = () => ({ distinct: async () => [] });
   Category.find = async () => [category];
-  openai.chatJSON = async () =>
+  llm.chatJSON = async () =>
     JSON.stringify({
       tasks: [
         {
