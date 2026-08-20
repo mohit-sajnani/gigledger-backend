@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const OtpSession = require('../models/OtpSession');
 const asyncHandler = require('../utils/asyncHandler');
-const { sendOtpEmail } = require('../services/mailer.service');
+const mailer = require('../services/mailer.service');
 
 const PASSWORD_SALT_ROUNDS = 10;
 const OTP_TTL_MS = 5 * 60 * 1000;
@@ -81,7 +81,7 @@ const login = asyncHandler(async (req, res) => {
       expiresAt: new Date(Date.now() + OTP_TTL_MS),
     });
 
-    await sendOtpEmail(user.email, code);
+    await mailer.sendOtpEmail(user.email, code);
 
     return res.status(200).json({
       success: true,
