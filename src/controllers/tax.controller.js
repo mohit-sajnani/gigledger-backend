@@ -43,7 +43,33 @@ Respond ONLY in valid JSON matching this exact structure:
  * it's trusted — a citation the model invents is dropped, not passed through.
  */
 const getTaxEstimate = asyncHandler(async (req, res) => {
-  const { period } = req.query;
+  const { period, refresh } = req.query;
+
+  // Cache-first: recomputing means at least two Gemini calls (slow, billed,
+  // and prone to the rate-limit-compounding hang seen during this feature's
+  // own testing). A cached estimate for the same user+period is served as-is
+  // unless the caller explicitly asks for a fresh computation.
+  if (refresh !== 'true') {
+    const cached = await TaxEstimate.findOne({ userId: req.userId, period });
+    if (cached) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          period: cached.period,
+          grossIncome: cached.grossIncome,
+          totalDeductions: cached.totalDeductions,
+          taxableIncome: cached.taxableIncome,
+          estimatedTax: cached.estimatedTax,
+          slabBreakdown: cached.slabBreakdown,
+          rulesUsed: cached.rulesUsed,
+          regime: cached.regime,
+          lowConfidence: false,
+          cached: true,
+        },
+        message: '',
+      });
+    }
+  }
 
   let startDate;
   let endDate;
@@ -72,11 +98,17 @@ const getTaxEstimate = asyncHandler(async (req, res) => {
   }
 
   // Re-validation: a citation not present in what was actually retrieved is
-  // hallucinated — drop it rather than trust it.
-  const retrievedIds = new Set(retrievedRules.map((r) => r.id));
+  // hallucinated — drop it rather than trust it. Title/source come from the
+  // trusted retrieved record itself, never the LLM's own citation object —
+  // a valid ruleId doesn't guarantee the model didn't alter the metadata
+  // attached to it (e.g. a fabricated "official source" URL).
+  const retrievedRulesById = new Map(retrievedRules.map((r) => [r.id, r]));
   const rulesUsed = (llmOutput.citedRules || [])
-    .filter((r) => retrievedIds.has(r.ruleId))
-    .map((r) => ({ ruleId: r.ruleId, title: r.title, sourceUrl: r.sourceUrl }));
+    .filter((r) => retrievedRulesById.has(r.ruleId))
+    .map((r) => {
+      const trusted = retrievedRulesById.get(r.ruleId);
+      return { ruleId: trusted.id, title: trusted.title, sourceUrl: trusted.source_url };
+    });
 
   const rateTable = (llmOutput.rateTable || []).filter(
     (slab) => typeof slab.threshold === 'number' && Number.isFinite(slab.threshold) && typeof slab.rate === 'number' && slab.rate >= 0 && slab.rate <= 1,

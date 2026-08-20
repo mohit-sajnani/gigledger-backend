@@ -65,11 +65,13 @@ test('GET /api/tax/estimate drops a citation the LLM invented that was never act
   const userId = new mongoose.Types.ObjectId().toString();
 
   taxService.aggregateIncomeAndDeductions = async () => ({ grossIncome: 500000, totalDeductions: 50000 });
-  rag.searchTaxRules = async () => [{ id: 'rule_real', title: 'Real Rule', source_url: 'https://example.com' }];
+  TaxEstimate.findOne = async () => null;
+  rag.searchTaxRules = async () => [{ id: 'rule_real', title: 'Real Rule', source_url: 'https://real.example.com' }];
   rag.generateJSONContent = async () =>
     JSON.stringify({
       citedRules: [
-        { ruleId: 'rule_real', title: 'Real Rule', sourceUrl: 'https://example.com' },
+        // A real ruleId, but with metadata the LLM altered — must be ignored in favor of the trusted retrieved record.
+        { ruleId: 'rule_real', title: 'Spoofed Title', sourceUrl: 'https://phishing.example.com' },
         { ruleId: 'rule_hallucinated', title: 'Made Up', sourceUrl: 'https://fake.example.com' },
       ],
       rateTable: [{ threshold: 300000, rate: 0 }, { threshold: Infinity, rate: 0.05 }],
@@ -82,6 +84,10 @@ test('GET /api/tax/estimate drops a citation the LLM invented that was never act
   const ruleIds = res.body.data.rulesUsed.map((r) => r.ruleId);
   assert.ok(ruleIds.includes('rule_real'));
   assert.ok(!ruleIds.includes('rule_hallucinated'));
+
+  const realRuleEntry = res.body.data.rulesUsed.find((r) => r.ruleId === 'rule_real');
+  assert.equal(realRuleEntry.title, 'Real Rule');
+  assert.equal(realRuleEntry.sourceUrl, 'https://real.example.com');
 });
 
 test('GET /api/tax/estimate clamps taxable income to zero when deductions exceed gross income', async () => {
@@ -89,6 +95,7 @@ test('GET /api/tax/estimate clamps taxable income to zero when deductions exceed
   const userId = new mongoose.Types.ObjectId().toString();
 
   taxService.aggregateIncomeAndDeductions = async () => ({ grossIncome: 10000, totalDeductions: 50000 });
+  TaxEstimate.findOne = async () => null;
   rag.searchTaxRules = async () => [];
   rag.generateJSONContent = async () => JSON.stringify({ citedRules: [], rateTable: [] });
   TaxEstimate.findOneAndUpdate = async (filter, doc) => doc;
@@ -98,6 +105,52 @@ test('GET /api/tax/estimate clamps taxable income to zero when deductions exceed
   assert.equal(res.status, 200);
   assert.equal(res.body.data.taxableIncome, 0);
   assert.equal(res.body.data.estimatedTax, 0);
+});
+
+test('GET /api/tax/estimate serves a cached estimate without calling Gemini, unless refresh=true', async () => {
+  const app = buildApp();
+  const userId = new mongoose.Types.ObjectId().toString();
+  let ragCalled = false;
+
+  TaxEstimate.findOne = async () => ({
+    period: 'Q2-2024-25',
+    grossIncome: 400000,
+    totalDeductions: 40000,
+    taxableIncome: 360000,
+    estimatedTax: 5000,
+    slabBreakdown: [],
+    rulesUsed: [],
+    regime: 'new',
+  });
+  rag.searchTaxRules = async () => {
+    ragCalled = true;
+    return [];
+  };
+
+  const res = await request(app).get('/api/tax/estimate?period=Q2-2024-25').set('Authorization', authHeader(userId));
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.cached, true);
+  assert.equal(res.body.data.estimatedTax, 5000);
+  assert.equal(ragCalled, false);
+});
+
+test('GET /api/tax/estimate?refresh=true recomputes even when a cached estimate exists', async () => {
+  const app = buildApp();
+  const userId = new mongoose.Types.ObjectId().toString();
+
+  TaxEstimate.findOne = async () => ({ period: 'Q2-2024-25', estimatedTax: 999 });
+  taxService.aggregateIncomeAndDeductions = async () => ({ grossIncome: 100000, totalDeductions: 0 });
+  rag.searchTaxRules = async () => [];
+  rag.generateJSONContent = async () => JSON.stringify({ citedRules: [], rateTable: [] });
+  TaxEstimate.findOneAndUpdate = async (filter, doc) => doc;
+
+  const res = await request(app)
+    .get('/api/tax/estimate?period=Q2-2024-25&refresh=true')
+    .set('Authorization', authHeader(userId));
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.cached, undefined);
 });
 
 test('GET /api/tax/estimate rejects a malformed period before touching any service', async () => {
@@ -114,6 +167,7 @@ test('GET /api/tax/estimate returns a clean 500 without leaking the raw provider
   const userId = new mongoose.Types.ObjectId().toString();
 
   taxService.aggregateIncomeAndDeductions = async () => ({ grossIncome: 100000, totalDeductions: 0 });
+  TaxEstimate.findOne = async () => null;
   rag.searchTaxRules = async () => {
     throw new Error('GoogleGenerativeAI Error: some internal provider detail');
   };
