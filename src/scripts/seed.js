@@ -2,11 +2,12 @@ require('dotenv').config();
 
 const mongoose = require('mongoose');
 const connectDB = require('../config/db');
+const User = require('../models/User');
 const Category = require('../models/Category');
 const Transaction = require('../models/Transaction');
 const logger = require('../utils/logger');
 
-const DEMO_USER_ID = process.env.DEMO_USER_ID || '000000000000000000000001';
+const DEMO_EMAIL = 'demo@gigledger.dev';
 
 const INCOME_CATEGORIES = [
   'Uber', 'Ola', 'Rapido', 'Zomato', 'Swiggy', 'Zepto', 'Blinkit', 'Instamart',
@@ -41,8 +42,22 @@ function daysAgo(n) {
 async function seed() {
   await connectDB();
 
+  const demoUser = await User.findOneAndUpdate(
+    { email: DEMO_EMAIL },
+    {
+      $setOnInsert: {
+        firstName: 'Demo',
+        lastName: 'Rider',
+        email: DEMO_EMAIL,
+        emailVerified: true,
+      },
+    },
+    { upsert: true, new: true },
+  );
+  const demoUserId = demoUser._id;
+
   await Category.deleteMany({});
-  await Transaction.deleteMany({ userId: DEMO_USER_ID });
+  await Transaction.deleteMany({ userId: demoUserId });
 
   const categoryDocs = [
     ...INCOME_CATEGORIES.map((name) => ({ name, type: 'income', taxDeductible: false, isDefault: true })),
@@ -63,7 +78,7 @@ async function seed() {
     const isIncome = i % 3 !== 0;
 
     transactions.push({
-      userId: DEMO_USER_ID,
+      userId: demoUserId,
       source: isIncome ? (i % 2 === 0 ? 'zomato' : 'uber') : 'manual',
       type: isIncome ? 'income' : 'expense',
       amount: isIncome ? 300 + i * 25 : 100 + i * 10,
@@ -77,7 +92,7 @@ async function seed() {
   }
   // One deliberately messy row for the "Run Agent" demo.
   transactions.push({
-    userId: DEMO_USER_ID,
+    userId: demoUserId,
     source: 'manual',
     type: 'expense',
     amount: 220,
@@ -91,7 +106,8 @@ async function seed() {
 
   await Transaction.insertMany(transactions);
 
-  logger.info(`Seed complete: ${categories.length} categories, ${transactions.length} transactions.`);
+  logger.info(`Seed complete: ${categories.length} categories, ${transactions.length} transactions for ${DEMO_EMAIL} (${demoUserId}).`);
+  logger.info(`Log in as this user via POST /api/auth/login with email "${DEMO_EMAIL}" — the OTP code prints to the running server's console (no SMTP configured).`);
   await mongoose.connection.close();
   process.exit(0);
 }

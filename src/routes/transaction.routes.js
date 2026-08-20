@@ -1,6 +1,6 @@
-// TODO: add protect middleware once auth lands — router.use(protect) is the only change needed.
 const express = require('express');
 const { body, param, query, validationResult } = require('express-validator');
+const { protect } = require('../middleware/auth.middleware');
 const {
   createTransaction,
   listTransactions,
@@ -12,6 +12,8 @@ const {
 } = require('../controllers/transaction.controller');
 
 const router = express.Router();
+
+router.use(protect);
 
 const SOURCES = ['uber', 'swiggy', 'zomato', 'ola', 'manual', 'other'];
 const TYPES = ['income', 'expense'];
