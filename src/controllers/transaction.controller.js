@@ -17,11 +17,6 @@ const UPDATABLE_FIELDS = [
   'notes',
 ];
 
-/** Resolves the effective requester id — real auth once `protect` lands, DEMO_USER_ID fallback until then. */
-function effectiveUserId(req) {
-  return req.userId || process.env.DEMO_USER_ID;
-}
-
 /** Confirms a category id resolves to an existing, non-deleted Category doc. */
 async function categoryExists(categoryId) {
   if (!categoryId) return true;
@@ -42,7 +37,7 @@ const createTransaction = asyncHandler(async (req, res) => {
   }
 
   const transaction = await Transaction.create({
-    userId: effectiveUserId(req),
+    userId: req.userId,
     source,
     type,
     amount,
@@ -71,7 +66,7 @@ const listTransactions = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'dateFrom must be before dateTo', errors: [] });
   }
 
-  const filter = { userId: effectiveUserId(req), deleted: false };
+  const filter = { userId: req.userId, deleted: false };
   if (status) filter.status = status;
   if (type) filter.type = type;
   if (source) filter.source = source;
@@ -104,7 +99,7 @@ const listTransactions = asyncHandler(async (req, res) => {
 const getTransaction = asyncHandler(async (req, res) => {
   const transaction = await Transaction.findOne({
     _id: req.params.id,
-    userId: effectiveUserId(req),
+    userId: req.userId,
     deleted: false,
   });
 
@@ -122,7 +117,7 @@ const getTransaction = asyncHandler(async (req, res) => {
 const updateTransaction = asyncHandler(async (req, res) => {
   const transaction = await Transaction.findOne({
     _id: req.params.id,
-    userId: effectiveUserId(req),
+    userId: req.userId,
     deleted: false,
   });
 
@@ -148,7 +143,7 @@ const updateTransaction = asyncHandler(async (req, res) => {
 const deleteTransaction = asyncHandler(async (req, res) => {
   const transaction = await Transaction.findOne({
     _id: req.params.id,
-    userId: effectiveUserId(req),
+    userId: req.userId,
     deleted: false,
   });
 
@@ -168,7 +163,7 @@ const deleteTransaction = asyncHandler(async (req, res) => {
  */
 const bulkImportTransactions = asyncHandler(async (req, res) => {
   const { transactions } = req.body;
-  const userId = effectiveUserId(req);
+  const userId = req.userId;
 
   const rows = [];
   const errors = [];
@@ -224,7 +219,7 @@ const bulkImportTransactions = asyncHandler(async (req, res) => {
 const approveTransaction = asyncHandler(async (req, res) => {
   const transaction = await Transaction.findOne({
     _id: req.params.id,
-    userId: effectiveUserId(req),
+    userId: req.userId,
     deleted: false,
   });
 

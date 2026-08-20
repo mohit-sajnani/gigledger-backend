@@ -1,8 +1,11 @@
 const express = require('express');
 const { query, body, validationResult } = require('express-validator');
+const { protect } = require('../middleware/auth.middleware');
 const { getCategories, createCategory } = require('../controllers/category.controller');
 
 const router = express.Router();
+
+router.use(protect);
 
 /** Short-circuits to a 400 with the express-validator error list if any rule failed. */
 function checkValidation(req, res, next) {

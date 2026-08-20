@@ -20,6 +20,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/categories', require('./routes/category.routes'));
 app.use('/api/transactions', require('./routes/transaction.routes'));
+app.use('/api/agent', require('./routes/agent.routes'));
 app.use('/api/tax', require('./routes/tax.routes'));
 
 app.use(notFound);
