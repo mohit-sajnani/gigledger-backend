@@ -17,6 +17,7 @@ app.get('/health', (req, res) => {
   res.status(200).json({ success: true, data: { status: 'ok', uptime: process.uptime() }, message: '' });
 });
 
+app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/categories', require('./routes/category.routes'));
 app.use('/api/transactions', require('./routes/transaction.routes'));
 
