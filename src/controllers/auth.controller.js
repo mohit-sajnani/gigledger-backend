@@ -1,9 +1,19 @@
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const OtpSession = require('../models/OtpSession');
 const asyncHandler = require('../utils/asyncHandler');
+const { sendOtpEmail } = require('../services/mailer.service');
 
 const PASSWORD_SALT_ROUNDS = 10;
+const OTP_TTL_MS = 5 * 60 * 1000;
+
+const INVALID_OTP_RESPONSE = {
+  success: false,
+  message: 'Invalid or expired code',
+  errors: [],
+};
 
 // Fixed hash to compare against when no user is found, so a login attempt
 // for a non-existent email takes the same time as a wrong password —
@@ -59,6 +69,73 @@ const login = asyncHandler(async (req, res) => {
     });
   }
 
+  // Password checked out, but 2FA users don't get a token yet — they get
+  // an emailed code and a pending session to redeem it against.
+  if (user.twoFactorEnabled) {
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const codeHash = await bcrypt.hash(code, PASSWORD_SALT_ROUNDS);
+
+    const otpSession = await OtpSession.create({
+      userId: user._id,
+      codeHash,
+      expiresAt: new Date(Date.now() + OTP_TTL_MS),
+    });
+
+    await sendOtpEmail(user.email, code);
+
+    return res.status(200).json({
+      success: true,
+      data: { pendingSessionId: otpSession._id, twoFactorRequired: true },
+      message: 'Enter the code sent to your email',
+    });
+  }
+
+  res.status(200).json({
+    success: true,
+    data: {
+      token: signToken(user._id),
+      user: { _id: user._id, name: user.name, email: user.email },
+    },
+    message: 'Logged in',
+  });
+});
+
+/**
+ * Lets a logged-in user turn their own 2FA on or off — never anyone
+ * else's, since the target is always req.userId from the verified JWT.
+ */
+const toggleTwoFactor = asyncHandler(async (req, res) => {
+  const { enabled } = req.body;
+  await User.findByIdAndUpdate(req.userId, { twoFactorEnabled: enabled });
+
+  res.status(200).json({
+    success: true,
+    data: { twoFactorEnabled: enabled },
+    message: 'Two-factor authentication updated',
+  });
+});
+
+/**
+ * Redeems the emailed code for the real JWT. One generic 401 for every
+ * failure mode (wrong code, unknown session, expired, already used) so
+ * nothing here becomes a fresh enumeration vector.
+ */
+const verifyTwoFactor = asyncHandler(async (req, res) => {
+  const { pendingSessionId, code } = req.body;
+  const otpSession = await OtpSession.findById(pendingSessionId);
+
+  const isUsable = otpSession && !otpSession.used && otpSession.expiresAt > new Date();
+  const codeMatches = isUsable && (await bcrypt.compare(code, otpSession.codeHash));
+
+  if (!codeMatches) {
+    return res.status(401).json(INVALID_OTP_RESPONSE);
+  }
+
+  otpSession.used = true;
+  await otpSession.save();
+
+  const user = await User.findById(otpSession.userId);
+
   res.status(200).json({
     success: true,
     data: {
@@ -101,4 +178,4 @@ const refresh = asyncHandler(async (req, res) => {
   }
 });
 
-module.exports = { register, login, refresh };
+module.exports = { register, login, refresh, toggleTwoFactor, verifyTwoFactor };
