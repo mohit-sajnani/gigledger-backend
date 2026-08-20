@@ -25,6 +25,7 @@ const otpSessionSchema = new Schema(
     expiresAt: { type: Date, required: true },
     used: { type: Boolean, default: false },
     attempts: { type: Number, default: 0 },
+    resendCount: { type: Number, default: 0 },
   },
   { timestamps: true }
 );
