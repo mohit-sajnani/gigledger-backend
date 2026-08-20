@@ -7,11 +7,13 @@ const connectDB = require('../config/db');
 const TaxRule = require('../models/TaxRule');
 const logger = require('../utils/logger');
 
-// Reads the pre-computed vectors the RAG teammate already generated and
-// committed (repo-root data/tax_rules_with_vectors.json) — no re-embedding,
-// just upserting into *this app's* MONGO_URI database instead of the
-// reference project's separate gig_tax_db.
-const VECTORS_PATH = path.resolve(__dirname, '../../data/tax_rules_with_vectors.json');
+// Reads the pre-computed vectors the RAG teammate already generated. Moved
+// out of the repo root into .ai-agents/ (gitignored) to de-duplicate against
+// the reference project's own copy — this means the vector file is NOT
+// version-controlled here. Anyone running this on a fresh clone needs the
+// file placed at this path manually (or re-run the reference project's own
+// scripts/ingest_vectors.js) before this script has anything to ingest.
+const VECTORS_PATH = path.resolve(__dirname, '../../.ai-agents/rag/root-assets/data/tax_rules_with_vectors.json');
 
 async function ingestTaxRules() {
   await connectDB();
