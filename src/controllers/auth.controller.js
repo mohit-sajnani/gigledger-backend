@@ -5,6 +5,11 @@ const asyncHandler = require('../utils/asyncHandler');
 
 const PASSWORD_SALT_ROUNDS = 10;
 
+// Fixed hash to compare against when no user is found, so a login attempt
+// for a non-existent email takes the same time as a wrong password —
+// closes the timing side-channel that would otherwise leak account existence.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync('not-a-real-password', PASSWORD_SALT_ROUNDS);
+
 const signToken = (userId) =>
   jwt.sign({ userId }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN,
@@ -41,10 +46,10 @@ const register = asyncHandler(async (req, res) => {
 const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   const user = await User.findOne({ email }).select('+passwordHash');
-
-  const passwordMatches = user
-    ? await bcrypt.compare(password, user.passwordHash)
-    : false;
+  const passwordMatches = await bcrypt.compare(
+    password,
+    user ? user.passwordHash : DUMMY_PASSWORD_HASH
+  );
 
   if (!user || !passwordMatches) {
     return res.status(401).json({
