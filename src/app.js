@@ -1,2 +1,26 @@
-// Express app setup — mounts all routes and middleware
-// TODO Phase 1: implement
+const express = require('express');
+const helmet = require('helmet');
+const cors = require('cors');
+const morgan = require('morgan');
+
+const notFound = require('./middleware/notFound');
+const errorHandler = require('./middleware/errorHandler');
+
+const app = express();
+
+app.use(helmet());
+app.use(cors({ origin: process.env.CLIENT_ORIGIN }));
+if (process.env.NODE_ENV !== 'test') app.use(morgan('dev'));
+app.use(express.json());
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ success: true, data: { status: 'ok', uptime: process.uptime() }, message: '' });
+});
+
+app.use('/api/categories', require('./routes/category.routes'));
+app.use('/api/transactions', require('./routes/transaction.routes'));
+
+app.use(notFound);
+app.use(errorHandler);
+
+module.exports = app;
