@@ -1,12 +1,13 @@
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const OtpSession = require('../models/OtpSession');
 const asyncHandler = require('../utils/asyncHandler');
 const mailer = require('../services/mailer.service');
 
-const PASSWORD_SALT_ROUNDS = 10;
+const OTP_SALT_ROUNDS = 10;
 const OTP_TTL_MS = 5 * 60 * 1000;
 const OTP_MAX_ATTEMPTS = 5;
 
@@ -16,114 +17,43 @@ const INVALID_OTP_RESPONSE = {
   errors: [],
 };
 
-// Fixed hash to compare against when no user is found, so a login attempt
-// for a non-existent email takes the same time as a wrong password —
-// closes the timing side-channel that would otherwise leak account existence.
-const DUMMY_PASSWORD_HASH = bcrypt.hashSync('not-a-real-password', PASSWORD_SALT_ROUNDS);
+// Fixed hash to compare against when a session isn't usable, so response
+// time never reveals whether a given pendingSessionId is currently live.
+const DUMMY_CODE_HASH = bcrypt.hashSync('not-a-real-code', OTP_SALT_ROUNDS);
 
 const signToken = (userId) =>
   jwt.sign({ userId }, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN,
   });
 
-/**
- * Creates the account and hands back the user, never the hash. Duplicate
- * emails are left for errorHandler.js to turn into a 409 (Mongo's 11000).
- */
-const register = asyncHandler(async (req, res) => {
-  const { name, email, password } = req.body;
-  const passwordHash = await bcrypt.hash(password, PASSWORD_SALT_ROUNDS);
-
-  const user = await User.create({ name, email, passwordHash });
-
-  res.status(201).json({
-    success: true,
-    data: {
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        createdAt: user.createdAt,
-      },
-    },
-    message: 'Registered',
-  });
+const shapeUser = (user) => ({
+  _id: user._id,
+  firstName: user.firstName,
+  lastName: user.lastName,
+  email: user.email,
 });
 
-/**
- * One generic 401 for both "no such email" and "wrong password" — don't
- * give an attacker a way to enumerate registered accounts.
- */
-const login = asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
-  const user = await User.findOne({ email }).select('+passwordHash');
-  const passwordMatches = await bcrypt.compare(
-    password,
-    user ? user.passwordHash : DUMMY_PASSWORD_HASH
-  );
-
-  if (!user || !passwordMatches) {
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid credentials',
-      errors: [],
-    });
-  }
-
-  // Password checked out, but 2FA users don't get a token yet — they get
-  // an emailed code and a pending session to redeem it against.
-  if (user.twoFactorEnabled) {
-    const code = crypto.randomInt(100000, 1000000).toString();
-    const codeHash = await bcrypt.hash(code, PASSWORD_SALT_ROUNDS);
-
-    const otpSession = await OtpSession.create({
-      userId: user._id,
-      codeHash,
-      expiresAt: new Date(Date.now() + OTP_TTL_MS),
-    });
-
-    await mailer.sendOtpEmail(user.email, code);
-
-    return res.status(200).json({
-      success: true,
-      data: { pendingSessionId: otpSession._id, twoFactorRequired: true },
-      message: 'Enter the code sent to your email',
-    });
-  }
-
-  res.status(200).json({
-    success: true,
-    data: {
-      token: signToken(user._id),
-      user: { _id: user._id, name: user.name, email: user.email },
-    },
-    message: 'Logged in',
+const createOtpSession = async (userId, purpose) => {
+  const code = crypto.randomInt(100000, 1000000).toString();
+  const codeHash = await bcrypt.hash(code, OTP_SALT_ROUNDS);
+  const otpSession = await OtpSession.create({
+    userId,
+    purpose,
+    codeHash,
+    expiresAt: new Date(Date.now() + OTP_TTL_MS),
   });
-});
+  return { otpSession, code };
+};
 
 /**
- * Lets a logged-in user turn their own 2FA on or off — never anyone
- * else's, since the target is always req.userId from the verified JWT.
+ * Redeems a code for a given purpose. Shared by register/verify and
+ * login/verify — same usable-check, same constant-time compare, same
+ * attempt-lockout; purpose keeps a registration code from verifying a
+ * login (or vice versa). Returns the used session, or null on any
+ * failure — caller doesn't get to know which failure it was.
  */
-const toggleTwoFactor = asyncHandler(async (req, res) => {
-  const { enabled } = req.body;
-  await User.findByIdAndUpdate(req.userId, { twoFactorEnabled: enabled });
-
-  res.status(200).json({
-    success: true,
-    data: { twoFactorEnabled: enabled },
-    message: 'Two-factor authentication updated',
-  });
-});
-
-/**
- * Redeems the emailed code for the real JWT. One generic 401 for every
- * failure mode (wrong code, unknown session, expired, already used) so
- * nothing here becomes a fresh enumeration vector.
- */
-const verifyTwoFactor = asyncHandler(async (req, res) => {
-  const { pendingSessionId, code } = req.body;
-  const otpSession = await OtpSession.findById(pendingSessionId);
+const redeemOtp = async (pendingSessionId, code, purpose) => {
+  const otpSession = await OtpSession.findOne({ _id: pendingSessionId, purpose });
 
   const isUsable =
     otpSession &&
@@ -131,35 +61,114 @@ const verifyTwoFactor = asyncHandler(async (req, res) => {
     otpSession.expiresAt > new Date() &&
     otpSession.attempts < OTP_MAX_ATTEMPTS;
 
-  // Always run bcrypt, even on a dead session, so response time can't be
-  // used to tell "wrong code" apart from "expired/used/locked session".
   const codeMatches = await bcrypt.compare(
     code,
-    isUsable ? otpSession.codeHash : DUMMY_PASSWORD_HASH
+    isUsable ? otpSession.codeHash : DUMMY_CODE_HASH
   );
 
   if (!isUsable || !codeMatches) {
-    // Count the guess against a still-live session so repeated wrong
-    // codes lock it out well before the 5-minute TTL would.
     if (otpSession && !otpSession.used && otpSession.expiresAt > new Date()) {
       otpSession.attempts += 1;
       if (otpSession.attempts >= OTP_MAX_ATTEMPTS) otpSession.used = true;
       await otpSession.save();
     }
-    return res.status(401).json(INVALID_OTP_RESPONSE);
+    return null;
   }
 
   otpSession.used = true;
   await otpSession.save();
+  return otpSession;
+};
+
+/**
+ * Creates the account unverified — nothing usable exists until the
+ * emailed code is redeemed at /register/verify.
+ */
+const register = asyncHandler(async (req, res) => {
+  const { firstName, lastName, email } = req.body;
+
+  const existing = await User.findOne({ email });
+  if (existing) {
+    return res.status(409).json({
+      success: false,
+      message: 'Email already registered',
+      errors: [],
+    });
+  }
+
+  const user = await User.create({ firstName, lastName, email, emailVerified: false });
+  const { otpSession, code } = await createOtpSession(user._id, 'register');
+  await mailer.sendOtpEmail(user.email, code, 'register');
+
+  res.status(201).json({
+    success: true,
+    data: { pendingSessionId: otpSession._id },
+    message: 'Check your email for a code to verify your account',
+  });
+});
+
+/** Activates the account and logs the user straight in. */
+const verifyRegistration = asyncHandler(async (req, res) => {
+  const { pendingSessionId, code } = req.body;
+  const otpSession = await redeemOtp(pendingSessionId, code, 'register');
+
+  if (!otpSession) {
+    return res.status(401).json(INVALID_OTP_RESPONSE);
+  }
+
+  const user = await User.findByIdAndUpdate(
+    otpSession.userId,
+    { emailVerified: true },
+    { new: true }
+  );
+
+  res.status(200).json({
+    success: true,
+    data: { token: signToken(user._id), user: shapeUser(user) },
+    message: 'Account verified',
+  });
+});
+
+/**
+ * No password to fail on anymore, so the response has to be identical
+ * whether the email is unknown, unverified, or verified — otherwise the
+ * response itself becomes the enumeration vector. Only the verified
+ * branch actually creates a session and sends mail; the others still
+ * hand back a same-shaped (but dead) pendingSessionId.
+ */
+const login = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+  const user = await User.findOne({ email });
+
+  let pendingSessionId = new mongoose.Types.ObjectId();
+
+  if (user && user.emailVerified) {
+    const { otpSession, code } = await createOtpSession(user._id, 'login');
+    pendingSessionId = otpSession._id;
+    await mailer.sendOtpEmail(user.email, code, 'login');
+  }
+
+  res.status(200).json({
+    success: true,
+    data: { pendingSessionId },
+    message: 'If an account exists for that email, a code has been sent',
+  });
+});
+
+/** Redeems the login code for a real JWT. */
+const verifyLogin = asyncHandler(async (req, res) => {
+  const { pendingSessionId, code } = req.body;
+  const otpSession = await redeemOtp(pendingSessionId, code, 'login');
+
+  if (!otpSession) {
+    return res.status(401).json(INVALID_OTP_RESPONSE);
+  }
 
   const user = await User.findById(otpSession.userId);
 
   res.status(200).json({
     success: true,
-    data: {
-      token: signToken(user._id),
-      user: { _id: user._id, name: user.name, email: user.email },
-    },
+    data: { token: signToken(user._id), user: shapeUser(user) },
     message: 'Logged in',
   });
 });
@@ -196,4 +205,4 @@ const refresh = asyncHandler(async (req, res) => {
   }
 });
 
-module.exports = { register, login, refresh, toggleTwoFactor, verifyTwoFactor };
+module.exports = { register, verifyRegistration, login, verifyLogin, refresh };
