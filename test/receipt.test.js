@@ -69,6 +69,18 @@ test('POST /api/receipts/upload rejects a disallowed mimetype', async () => {
   assert.equal(res.status, 400);
 });
 
+test('POST /api/receipts/upload rejects a file whose content does not match its declared image type', async () => {
+  const app = buildApp();
+  const res = await request(app)
+    .post('/api/receipts/upload')
+    .set('Authorization', authHeader(new mongoose.Types.ObjectId().toString()))
+    .attach('receipt', Buffer.from('this is plain text pretending to be a jpeg'), {
+      filename: 'spoofed.jpg',
+      contentType: 'image/jpeg',
+    });
+  assert.equal(res.status, 400);
+});
+
 test('POST /api/receipts/upload rejects an oversized file', async () => {
   const app = buildApp();
   const oversized = Buffer.alloc(6 * 1024 * 1024, 0xff);

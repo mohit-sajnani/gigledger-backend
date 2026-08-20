@@ -60,7 +60,7 @@ const uploadReceipt = asyncHandler(async (req, res) => {
     data: {
       amount,
       date: validateDate(extracted.date),
-      rawDescription: typeof extracted.description === 'string' ? extracted.description : '',
+      rawDescription: typeof extracted.description === 'string' ? extracted.description.slice(0, 500) : '',
       category,
       confidence,
     },
