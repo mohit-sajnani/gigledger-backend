@@ -1,6 +1,6 @@
-// TODO: add protect middleware once auth lands — router.use(protect) is the only change needed.
 const express = require('express');
 const { body, param, query, validationResult } = require('express-validator');
+const { protect } = require('../middleware/auth.middleware');
 const {
   createTransaction,
   listTransactions,
@@ -12,6 +12,11 @@ const {
 } = require('../controllers/transaction.controller');
 
 const router = express.Router();
+
+// Auth has landed — every transaction route now requires it. Falls back to
+// DEMO_USER_ID only if req.userId is somehow unset (see effectiveUserId in
+// the controller), which shouldn't happen with protect in place.
+router.use(protect);
 
 const SOURCES = ['uber', 'swiggy', 'zomato', 'ola', 'manual', 'other'];
 const TYPES = ['income', 'expense'];
