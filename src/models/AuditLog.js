@@ -8,7 +8,7 @@ const auditLogSchema = new mongoose.Schema(
     before: { type: mongoose.Schema.Types.Mixed, required: true },
     after: { type: mongoose.Schema.Types.Mixed, required: true },
     approvedBy: { type: String, enum: ['user', 'system'], default: 'user' },
-    targetModel: { type: String, enum: ['Transaction'], default: 'Transaction' },
+    targetModel: { type: String, enum: ['Transaction', 'Deadline'], default: 'Transaction' },
     targetId: { type: mongoose.Schema.Types.ObjectId, required: true },
   },
   { timestamps: true },
