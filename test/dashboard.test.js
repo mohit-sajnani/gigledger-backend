@@ -55,7 +55,7 @@ test('GET /api/dashboard/summary computes correct totals for the requested month
     pendingTransactions: 7,
     categorizedTransactions: 23,
   });
-  assert.ok(seenFilters.every((f) => f.userId === userId && f.deleted === false));
+  assert.ok(seenFilters.every((f) => f.userId.toString() === userId && f.deleted === false));
 });
 
 test('GET /api/dashboard/summary rejects a malformed month with a 400', async () => {
@@ -86,7 +86,8 @@ test('GET /api/dashboard/income-by-source scopes the aggregation to the requesti
     .set('Authorization', authHeader(userA));
 
   assert.equal(res.status, 200);
-  assert.equal(capturedMatch.userId, userA);
+  assert.equal(capturedMatch.userId.toString(), userA);
+  assert.ok(capturedMatch.userId instanceof mongoose.Types.ObjectId, '$match.userId must be a real ObjectId, not a raw string — aggregate() pipelines are not auto-cast by Mongoose the way find()/countDocuments() are');
   assert.equal(res.body.data.breakdown[0].percentage, 45.4);
   assert.equal(res.body.data.breakdown.length, 3);
 });

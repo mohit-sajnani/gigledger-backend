@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Transaction = require('../models/Transaction');
 const TaxEstimate = require('../models/TaxEstimate');
 const asyncHandler = require('../utils/asyncHandler');
@@ -39,7 +40,7 @@ function resolveFinancialYear(now) {
 
 async function sumAmount(userId, type, start, end) {
   const [result] = await Transaction.aggregate([
-    { $match: { userId, type, deleted: false, date: { $gte: start, $lt: end } } },
+    { $match: { userId: new mongoose.Types.ObjectId(userId), type, deleted: false, date: { $gte: start, $lt: end } } },
     { $group: { _id: null, total: { $sum: '$amount' } } },
   ]);
   return result ? result.total : 0;
@@ -76,7 +77,7 @@ const getIncomeBySource = asyncHandler(async (req, res) => {
   const { start, end, period } = resolveMonthRange(req.query.month);
 
   const grouped = await Transaction.aggregate([
-    { $match: { userId: req.userId, type: 'income', deleted: false, date: { $gte: start, $lt: end } } },
+    { $match: { userId: new mongoose.Types.ObjectId(req.userId), type: 'income', deleted: false, date: { $gte: start, $lt: end } } },
     { $group: { _id: '$source', total: { $sum: '$amount' }, count: { $sum: 1 } } },
     { $sort: { total: -1 } },
   ]);
@@ -97,7 +98,7 @@ const getExpenseByCategory = asyncHandler(async (req, res) => {
   const { start, end, period } = resolveMonthRange(req.query.month);
 
   const grouped = await Transaction.aggregate([
-    { $match: { userId: req.userId, type: 'expense', deleted: false, date: { $gte: start, $lt: end } } },
+    { $match: { userId: new mongoose.Types.ObjectId(req.userId), type: 'expense', deleted: false, date: { $gte: start, $lt: end } } },
     { $group: { _id: '$category', total: { $sum: '$amount' }, count: { $sum: 1 } } },
     { $lookup: { from: 'categories', localField: '_id', foreignField: '_id', as: 'categoryDoc' } },
     { $sort: { total: -1 } },
@@ -125,7 +126,7 @@ const getMonthlyTrend = asyncHandler(async (req, res) => {
   const since = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - 1), 1));
 
   const grouped = await Transaction.aggregate([
-    { $match: { userId: req.userId, deleted: false, date: { $gte: since } } },
+    { $match: { userId: new mongoose.Types.ObjectId(req.userId), deleted: false, date: { $gte: since } } },
     {
       $group: {
         _id: { year: { $year: '$date' }, month: { $month: '$date' }, type: '$type' },
