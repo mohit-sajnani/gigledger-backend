@@ -43,3 +43,8 @@ coverage/
 .cache/
 tmp/
 temp/
+
+# Local agent tooling — never meant to be committed/shared
+.ai-agents/
+.claude/
+postman/
