@@ -8,9 +8,7 @@
     "dev": "nodemon server.js",
     "seed": "node src/scripts/seed.js",
     "test": "node --test test/",
-    "ingest:vectors": "node scripts/ingest_vectors.js",
-    "ingest:mongo": "node scripts/ingest_to_mongodb.js",
-    "test:rag": "node scripts/test_rag.js"
+    "ingest:tax-rules": "node src/scripts/ingestTaxRules.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
