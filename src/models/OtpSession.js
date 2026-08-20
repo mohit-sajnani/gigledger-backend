@@ -8,11 +8,19 @@ const { Schema } = mongoose;
  * a registration code must never verify as a login code or vice versa.
  * codeHash is bcrypt, never the raw code. The TTL index below does the
  * cleanup — nothing else has to.
+ *
+ * For purpose 'register' there's no User yet — email/firstName/lastName
+ * hold the pending signup so the account is only ever created once the
+ * code is actually verified. An abandoned registration this way just
+ * expires with the session; it never squats the email permanently.
  */
 const otpSessionSchema = new Schema(
   {
-    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    userId: { type: Schema.Types.ObjectId, ref: 'User' },
     purpose: { type: String, enum: ['register', 'login'], required: true },
+    email: { type: String, required: true, lowercase: true, trim: true },
+    firstName: { type: String, trim: true },
+    lastName: { type: String, trim: true },
     codeHash: { type: String, required: true },
     expiresAt: { type: Date, required: true },
     used: { type: Boolean, default: false },

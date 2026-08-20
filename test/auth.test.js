@@ -37,19 +37,17 @@ const fakeSession = (overrides = {}) => ({
   ...overrides,
 });
 
-test('POST /api/auth/register creates an unverified user and emails a code', async () => {
+test('POST /api/auth/register does not create a User yet — only a pending OtpSession', async () => {
   const app = buildApp();
-  const userId = new mongoose.Types.ObjectId();
   const sessionId = new mongoose.Types.ObjectId();
-  let createdUser;
   let createdSession;
+  let userCreateCalled = false;
   let mailedTo;
   let mailedPurpose;
 
   User.findOne = async () => null;
-  User.create = async (doc) => {
-    createdUser = { _id: userId, createdAt: new Date(), ...doc };
-    return createdUser;
+  User.create = async () => {
+    userCreateCalled = true;
   };
   OtpSession.create = async (doc) => {
     createdSession = { _id: sessionId, ...doc };
@@ -67,11 +65,12 @@ test('POST /api/auth/register creates an unverified user and emails a code', asy
   assert.equal(res.status, 201);
   assert.equal(res.body.data.pendingSessionId, sessionId.toString());
   assert.equal(res.body.data.token, undefined);
-  assert.equal(createdUser.emailVerified, false);
-  assert.equal(createdUser.passwordHash, undefined);
+  assert.equal(userCreateCalled, false);
+  assert.equal(createdSession.purpose, 'register');
+  assert.equal(createdSession.email, 'asha@example.com');
+  assert.equal(createdSession.firstName, 'Asha');
   assert.equal(mailedTo, 'asha@example.com');
   assert.equal(mailedPurpose, 'register');
-  assert.equal(createdSession.purpose, 'register');
 });
 
 test('POST /api/auth/register rejects a request with no password field required, but does reject a bad name', async () => {
@@ -94,19 +93,23 @@ test('POST /api/auth/register rejects a duplicate email with 409', async () => {
   assert.equal(res.status, 409);
 });
 
-test('POST /api/auth/register/verify activates the account and issues a token', async () => {
+test('POST /api/auth/register/verify creates the account (already verified) and issues a token', async () => {
   const app = buildApp();
   const userId = new mongoose.Types.ObjectId();
   const codeHash = await bcrypt.hash('123456', 10);
-  const session = fakeSession({ userId, purpose: 'register', codeHash });
-  OtpSession.findOne = async () => session;
-  User.findByIdAndUpdate = async (id, update) => ({
-    _id: id,
+  const session = fakeSession({
+    purpose: 'register',
+    codeHash,
+    email: 'asha@example.com',
     firstName: 'Asha',
     lastName: 'Rao',
-    email: 'asha@example.com',
-    ...update,
   });
+  OtpSession.findOne = async () => session;
+  let createdDoc;
+  User.create = async (doc) => {
+    createdDoc = doc;
+    return { _id: userId, ...doc };
+  };
 
   const res = await request(app)
     .post('/api/auth/register/verify')
@@ -115,7 +118,47 @@ test('POST /api/auth/register/verify activates the account and issues a token', 
   assert.equal(res.status, 200);
   assert.ok(res.body.data.token);
   assert.equal(res.body.data.user.email, 'asha@example.com');
+  assert.equal(createdDoc.emailVerified, true);
   assert.equal(session.used, true);
+});
+
+test('POST /api/auth/register/verify returns 409 if the email was registered by a racing session', async () => {
+  const app = buildApp();
+  const codeHash = await bcrypt.hash('123456', 10);
+  const session = fakeSession({
+    purpose: 'register',
+    codeHash,
+    email: 'asha@example.com',
+    firstName: 'Asha',
+    lastName: 'Rao',
+  });
+  OtpSession.findOne = async () => session;
+  User.create = async () => {
+    const err = new Error('duplicate key');
+    err.code = 11000;
+    throw err;
+  };
+
+  const res = await request(app)
+    .post('/api/auth/register/verify')
+    .send({ pendingSessionId: session._id.toString(), code: '123456' });
+
+  assert.equal(res.status, 409);
+});
+
+test('a second /register for the same email works again after the first session expires unverified', async () => {
+  const app = buildApp();
+  // No User was ever created for the first, abandoned attempt — so
+  // findOne still returns null and this is treated as a fresh signup.
+  User.findOne = async () => null;
+  OtpSession.create = async (doc) => ({ _id: new mongoose.Types.ObjectId(), ...doc });
+  mailer.sendOtpEmail = async () => {};
+
+  const res = await request(app)
+    .post('/api/auth/register')
+    .send({ firstName: 'Asha', lastName: 'Rao', email: 'asha@example.com' });
+
+  assert.equal(res.status, 201);
 });
 
 test('POST /api/auth/register/verify rejects a wrong code with a generic 401', async () => {

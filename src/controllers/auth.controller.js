@@ -33,12 +33,15 @@ const shapeUser = (user) => ({
   email: user.email,
 });
 
-const createOtpSession = async (userId, purpose) => {
+const createOtpSession = async ({ purpose, email, userId, firstName, lastName }) => {
   const code = crypto.randomInt(100000, 1000000).toString();
   const codeHash = await bcrypt.hash(code, OTP_SALT_ROUNDS);
   const otpSession = await OtpSession.create({
-    userId,
     purpose,
+    email,
+    userId,
+    firstName,
+    lastName,
     codeHash,
     expiresAt: new Date(Date.now() + OTP_TTL_MS),
   });
@@ -81,8 +84,9 @@ const redeemOtp = async (pendingSessionId, code, purpose) => {
 };
 
 /**
- * Creates the account unverified — nothing usable exists until the
- * emailed code is redeemed at /register/verify.
+ * No account is created here at all — an unverified signup that never
+ * completes must not permanently occupy the email. firstName/lastName/
+ * email live on the OtpSession until the code is actually redeemed.
  */
 const register = asyncHandler(async (req, res) => {
   const { firstName, lastName, email } = req.body;
@@ -96,9 +100,13 @@ const register = asyncHandler(async (req, res) => {
     });
   }
 
-  const user = await User.create({ firstName, lastName, email, emailVerified: false });
-  const { otpSession, code } = await createOtpSession(user._id, 'register');
-  await mailer.sendOtpEmail(user.email, code, 'register');
+  const { otpSession, code } = await createOtpSession({
+    purpose: 'register',
+    email,
+    firstName,
+    lastName,
+  });
+  await mailer.sendOtpEmail(email, code, 'register');
 
   res.status(201).json({
     success: true,
@@ -107,7 +115,12 @@ const register = asyncHandler(async (req, res) => {
   });
 });
 
-/** Activates the account and logs the user straight in. */
+/**
+ * Creates the account — already verified, since it only exists once the
+ * code is confirmed — and logs the user straight in. Two sessions racing
+ * for the same email is handled explicitly: the loser hits the unique
+ * index and gets a normal 409, not a crash.
+ */
 const verifyRegistration = asyncHandler(async (req, res) => {
   const { pendingSessionId, code } = req.body;
   const otpSession = await redeemOtp(pendingSessionId, code, 'register');
@@ -116,11 +129,24 @@ const verifyRegistration = asyncHandler(async (req, res) => {
     return res.status(401).json(INVALID_OTP_RESPONSE);
   }
 
-  const user = await User.findByIdAndUpdate(
-    otpSession.userId,
-    { emailVerified: true },
-    { new: true }
-  );
+  let user;
+  try {
+    user = await User.create({
+      firstName: otpSession.firstName,
+      lastName: otpSession.lastName,
+      email: otpSession.email,
+      emailVerified: true,
+    });
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'Email already registered',
+        errors: [],
+      });
+    }
+    throw err;
+  }
 
   res.status(200).json({
     success: true,
@@ -143,7 +169,11 @@ const login = asyncHandler(async (req, res) => {
   let pendingSessionId = new mongoose.Types.ObjectId();
 
   if (user && user.emailVerified) {
-    const { otpSession, code } = await createOtpSession(user._id, 'login');
+    const { otpSession, code } = await createOtpSession({
+      purpose: 'login',
+      email: user.email,
+      userId: user._id,
+    });
     pendingSessionId = otpSession._id;
     await mailer.sendOtpEmail(user.email, code, 'login');
   }
