@@ -41,10 +41,14 @@ async function syncDeadlines(userId) {
     const dueYear = startYear + rule.yearOffset;
     const dueDate = new Date(Date.UTC(dueYear, rule.month, rule.day));
 
-    let deadline = await Deadline.findOne({ userId, label: rule.label, financialYear });
-    if (!deadline) {
-      deadline = new Deadline({ userId, type: rule.type, label: rule.label, financialYear, dueDate });
-    }
+    // Atomic upsert, not findOne-then-new — two concurrent syncs for the same
+    // user (e.g. a double page-load) must never both try to create the same
+    // {userId, label, financialYear} row and trip the unique index.
+    const deadline = await Deadline.findOneAndUpdate(
+      { userId, label: rule.label, financialYear },
+      { $setOnInsert: { userId, type: rule.type, label: rule.label, financialYear, dueDate } },
+      { upsert: true, new: true },
+    );
 
     if (deadline.status !== 'completed') {
       const daysUntilDue = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
