@@ -171,6 +171,29 @@ async function applyApprovedTask(task, session) {
   if (task.status !== 'proposed') {
     throw new Error(`applyApprovedTask called on a task with status "${task.status}"`);
   }
+
+  // Acknowledging a deadline notification doesn't touch a Transaction — the
+  // deadline itself was already marked notified when the task was proposed.
+  // We still write an AuditLog entry so every approved task leaves a trail.
+  if (task.type === 'deadline_check') {
+    const [auditLog] = await AuditLog.create(
+      [
+        {
+          userId: task.userId,
+          actionType: 'deadline.acknowledge',
+          agentTaskId: task._id,
+          before: { acknowledged: false },
+          after: { acknowledged: true },
+          approvedBy: 'user',
+          targetModel: 'Deadline',
+          targetId: task.proposedChange.deadlineId,
+        },
+      ],
+      { session },
+    );
+    return { transaction: null, auditLog };
+  }
+
   if (task.type !== 'categorize') {
     throw new Error(`applyApprovedTask does not support task type "${task.type}"`);
   }
