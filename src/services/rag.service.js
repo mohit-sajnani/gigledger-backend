@@ -139,15 +139,24 @@ const searchTaxRules = async (queryText, topK = 3) => {
  * Calls Gemini for JSON generation, trying candidate text models until one
  * succeeds (Google's model names/availability shift over time). The prompt
  * itself is the caller's responsibility — this is just the SDK plumbing.
+ *
+ * Accepts either a plain string (every existing text-only caller) or an
+ * array of multimodal parts (text + inlineData, for image input) — a string
+ * is wrapped into a single-part array so both shapes flow through the same
+ * `{ contents: [{ role: 'user', parts }] }` request, identical behavior to
+ * the old string-only call for every caller that never changes.
  */
-const generateJSONContent = async (prompt) => {
+const generateJSONContent = async (promptOrParts) => {
+  const parts = Array.isArray(promptOrParts) ? promptOrParts : [{ text: promptOrParts }];
+  const requestBody = { contents: [{ role: 'user', parts }] };
+
   if (workingTextModel) {
     try {
       const model = genAI.getGenerativeModel({
         model: workingTextModel,
         generationConfig: { responseMimeType: 'application/json' },
       });
-      const response = await model.generateContent(prompt);
+      const response = await model.generateContent(requestBody);
       if (response && response.response) return response.response.text();
     } catch (e) {
       workingTextModel = null;
@@ -167,10 +176,10 @@ const generateJSONContent = async (prompt) => {
 
       let response;
       try {
-        response = await model.generateContent(prompt);
+        response = await model.generateContent(requestBody);
       } catch (jsonErr) {
         model = genAI.getGenerativeModel({ model: modelName });
-        response = await model.generateContent(prompt);
+        response = await model.generateContent(requestBody);
       }
 
       if (response && response.response) {
