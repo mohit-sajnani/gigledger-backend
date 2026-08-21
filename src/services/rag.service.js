@@ -146,6 +146,60 @@ const searchTaxRules = async (queryText, topK = 3) => {
  * `{ contents: [{ role: 'user', parts }] }` request, identical behavior to
  * the old string-only call for every caller that never changes.
  */
+/**
+ * Some Gemini models ignore responseMimeType: 'application/json' and wrap the
+ * actual JSON in chain-of-thought reasoning, sometimes repeating the object
+ * multiple times (draft, fenced example, final answer). A naive first-{/last-}
+ * slice would span across all of those and fail to parse. Instead this walks
+ * every balanced {...} / [...] span in the text and returns the LAST one that
+ * parses as valid JSON — the model's final answer is always the last repeat.
+ */
+const extractJson = (text) => {
+  let lastValid = null;
+  let i = 0;
+
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch !== '{' && ch !== '[') {
+      i++;
+      continue;
+    }
+
+    const closeChar = ch === '{' ? '}' : ']';
+    let depth = 0;
+    let matchEnd = -1;
+    for (let j = i; j < text.length; j++) {
+      if (text[j] === ch) depth++;
+      else if (text[j] === closeChar) {
+        depth--;
+        if (depth === 0) {
+          matchEnd = j;
+          break;
+        }
+      }
+    }
+
+    if (matchEnd === -1) {
+      i++;
+      continue;
+    }
+
+    // Only treat this as a top-level candidate, never descend into it to
+    // look for nested "candidates" — a rateTable entry buried inside the
+    // real answer must never be mistaken for a sibling repeat of it.
+    const candidate = text.slice(i, matchEnd + 1);
+    try {
+      JSON.parse(candidate);
+      lastValid = candidate;
+    } catch (e) {
+      // not valid JSON on its own — keep scanning
+    }
+    i = matchEnd + 1;
+  }
+
+  return lastValid !== null ? lastValid : text.trim();
+};
+
 const generateJSONContent = async (promptOrParts) => {
   const parts = Array.isArray(promptOrParts) ? promptOrParts : [{ text: promptOrParts }];
   const requestBody = { contents: [{ role: 'user', parts }] };
@@ -157,7 +211,7 @@ const generateJSONContent = async (promptOrParts) => {
         generationConfig: { responseMimeType: 'application/json' },
       });
       const response = await model.generateContent(requestBody);
-      if (response && response.response) return response.response.text();
+      if (response && response.response) return extractJson(response.response.text());
     } catch (e) {
       workingTextModel = null;
     }
@@ -184,7 +238,7 @@ const generateJSONContent = async (promptOrParts) => {
 
       if (response && response.response) {
         workingTextModel = modelName;
-        return response.response.text();
+        return extractJson(response.response.text());
       }
     } catch (err) {
       lastError = err;

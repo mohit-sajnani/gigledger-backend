@@ -97,6 +97,17 @@ const calculateTax = (taxableIncome, rateTable) => {
     prevThreshold = bandCap;
   }
 
+  // If the supplied slabs don't reach taxableIncome (e.g. an incomplete
+  // LLM extraction missing the top open-ended band), tax the remainder at
+  // the highest known rate rather than silently treating it as untaxed.
+  if (remaining > 0 && sortedSlabs.length > 0) {
+    const topRate = sortedSlabs[sortedSlabs.length - 1].rate;
+    const taxForBand = remaining * topRate;
+    slabBreakdown.push({ threshold: null, rate: topRate, amountInBand: remaining, taxForBand });
+    totalTax += taxForBand;
+    remaining = 0;
+  }
+
   const cess = totalTax * CESS_RATE;
   const estimatedTax = Math.round(totalTax + cess);
 
