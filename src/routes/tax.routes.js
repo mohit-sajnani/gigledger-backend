@@ -2,7 +2,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { query, validationResult } = require('express-validator');
 const { protect } = require('../middleware/auth.middleware');
-const { getTaxEstimate, searchTaxRules, exportTaxEstimate } = require('../controllers/tax.controller');
+const { getTaxEstimate, searchTaxRules, exportTaxReport } = require('../controllers/tax.controller');
 
 const router = express.Router();
 
@@ -68,6 +68,20 @@ router.get(
   ],
   checkValidation,
   searchTaxRules,
+);
+
+// No LLM/RAG call on this path (it only reads an already-computed
+// TaxEstimate), so it's deliberately not wrapped in taxLlmRateLimit — that
+// limiter's max:5/min is sized for Gemini cost, which doesn't apply here.
+router.get(
+  '/export',
+  protect,
+  [
+    query('period').notEmpty().matches(/^Q[1-4]-\d{4}-\d{2}$/).withMessage('period must look like Q2-2024-25'),
+    query('format').optional().isIn(['pdf', 'excel']).withMessage('format must be pdf or excel'),
+  ],
+  checkValidation,
+  exportTaxReport,
 );
 
 module.exports = router;

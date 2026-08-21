@@ -48,3 +48,8 @@ temp/
 .ai-agents/
 .claude/
 postman/
+
+plans/
+docs/
+postmans/
+.gitignore

@@ -1,7 +1,9 @@
 const TaxEstimate = require('../models/TaxEstimate');
 const taxService = require('../services/tax.service');
 const rag = require('../services/rag.service');
-const { streamEstimatePdf, streamEstimateExcel } = require('../services/taxExport.service');
+const reportService = require('../services/report.service');
+const { renderPdf } = require('../services/pdfReport.service');
+const { renderExcel } = require('../services/excelReport.service');
 const logger = require('../utils/logger');
 const asyncHandler = require('../utils/asyncHandler');
 
@@ -169,34 +171,46 @@ const searchTaxRules = asyncHandler(async (req, res) => {
 });
 
 /**
- * GET /api/tax/export — downloads an already-computed estimate as PDF or
- * Excel. Never computes a fresh estimate itself: 404s if the caller hasn't
- * run GET /api/tax/estimate for this period yet, so the frontend should only
- * show the download buttons once that call has succeeded.
+ * GET /api/tax/export — streams a downloadable PDF or Excel computation
+ * sheet for an already-estimated period. No LLM/RAG call on this path —
+ * it only reads a TaxEstimate that GET /api/tax/estimate must have already
+ * produced. Validation (period/format) has already run in the route before
+ * this handler executes, so nothing here writes a response header until
+ * the estimate lookup itself has resolved — once the file starts streaming
+ * there is no way back to a JSON error response.
  */
-const exportTaxEstimate = asyncHandler(async (req, res) => {
-  const { period, format } = req.query;
+const exportTaxReport = asyncHandler(async (req, res) => {
+  const { period } = req.query;
+  const format = req.query.format || 'pdf';
 
-  const estimate = await TaxEstimate.findOne({ userId: req.userId, period });
-  if (!estimate) {
+  const reportData = await reportService.buildReportData(req.userId, period);
+  if (!reportData) {
     return res.status(404).json({
       success: false,
-      message: `No tax estimate found for ${period} — compute one first via GET /api/tax/estimate`,
+      message: 'No tax estimate found for this period — call GET /api/tax/estimate first',
       errors: [],
     });
   }
 
-  const filenameBase = `gigledger-tax-estimate-${period}`;
-
-  if (format === 'pdf') {
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}.pdf"`);
-    return streamEstimatePdf(estimate, res);
+  if (format === 'excel') {
+    const buffer = await renderExcel(reportData);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="gigledger-tax-report-${period}.xlsx"`);
+    return res.status(200).send(buffer);
   }
 
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}.xlsx"`);
-  return streamEstimateExcel(estimate, res);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="gigledger-tax-report-${period}.pdf"`);
+  const pdfStream = renderPdf(reportData);
+  pdfStream.on('error', (err) => {
+    logger.error(`PDF export failed for user ${req.userId}, period ${period}: ${err.message}`);
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, message: 'Report generation failed', errors: [] });
+    } else {
+      res.destroy();
+    }
+  });
+  pdfStream.pipe(res);
 });
 
-module.exports = { getTaxEstimate, searchTaxRules, exportTaxEstimate };
+module.exports = { getTaxEstimate, searchTaxRules, exportTaxReport };
