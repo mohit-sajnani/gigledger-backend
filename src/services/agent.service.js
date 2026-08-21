@@ -152,15 +152,67 @@ async function runAgentCycle(userId) {
   return { tasks: created, message: 'Agent run complete.' };
 }
 
+const CATEGORIZATION_SYSTEM_PROMPT = `You are a financial assistant for a gig worker (rider/delivery driver/freelancer).
+You will be given a single uncategorized transaction and a list of available categories.
+Pick the single most appropriate category from the provided list by its exact _id, and
+explain your reasoning in one short sentence.
+Return ONLY a JSON object shaped exactly like this — no prose, no markdown fences:
+{ "categoryId": "<categoryId>", "confidence": 0.0-1.0, "reasoning": "..." }`;
+
 /**
- * LLM call #2 (optional, fine-grained) — deferred to a later phase. The
- * planner call already does both planning and categorization in one shot,
- * which is sufficient for the hackathon demo. Not wired into runAgentCycle.
+ * LLM call #2 — fine-grained, per-transaction classification. Unlike
+ * plannerLLMCall (which batches many transactions into one call),
+ * this scores a single transaction on its own; useful for re-running
+ * categorization on one transaction (e.g. a manual retry) without
+ * paying for a full batch call. Returns a validated "categorize" task
+ * object ready for AgentTask.insertMany, or null if the LLM call fails,
+ * returns malformed JSON, or names a category never offered to it.
  */
-// eslint-disable-next-line no-unused-vars
 async function categorizationAgent(transaction, categories) {
-  // TODO Phase 2.5 / bonus: per-transaction fine-grained classification.
-  throw new Error('categorizationAgent is not implemented — plannerLLMCall handles categorization for now.');
+  const sentCategoryIds = new Set(categories.map((c) => c._id.toString()));
+
+  const userMessage = JSON.stringify({
+    transaction: serializeTransaction(transaction),
+    categories: categories.map(serializeCategory),
+  });
+
+  let raw;
+  try {
+    raw = await llm.chatJSON({ system: CATEGORIZATION_SYSTEM_PROMPT, user: userMessage });
+  } catch (err) {
+    logger.error(`Categorization LLM call failed: ${err.message}`);
+    return null;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    logger.warn(`Categorization LLM returned malformed JSON, raw response: ${raw}`);
+    return null;
+  }
+
+  const categoryId = parsed.categoryId;
+  if (!categoryId || !sentCategoryIds.has(categoryId)) {
+    logger.warn(`Dropping categorization proposal referencing unknown categoryId "${categoryId}"`);
+    return null;
+  }
+
+  const confidence = Number(parsed.confidence);
+  const reasoning = String(parsed.reasoning || '').slice(0, 1000) || 'No reasoning provided.';
+
+  return {
+    userId: transaction.userId,
+    type: 'categorize',
+    status: 'proposed',
+    inputRefs: [transaction._id.toString()],
+    proposedChange: {
+      categoryId,
+      confidence: Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : null,
+    },
+    reasoning,
+    priority: 3,
+  };
 }
 
 /**

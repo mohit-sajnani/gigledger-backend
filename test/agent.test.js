@@ -14,6 +14,7 @@ const Category = require('../src/models/Category');
 const AuditLog = require('../src/models/AuditLog');
 const llm = require('../src/config/gemini');
 const agentRoutes = require('../src/routes/agent.routes');
+const { categorizationAgent } = require('../src/services/agent.service');
 
 /** Minimal app: just the agent routes, no db.js/app.js dependency. */
 const buildApp = () => {
@@ -315,4 +316,54 @@ test('AuditLog is append-only — updateOne, deleteOne, and replaceOne all throw
   await assert.rejects(() => AuditLog.updateOne({}, {}).exec(), /append-only/);
   await assert.rejects(() => AuditLog.deleteOne({}).exec(), /append-only/);
   await assert.rejects(() => AuditLog.replaceOne({}, {}).exec(), /append-only/);
+});
+
+test('categorizationAgent returns a valid proposed task for a single transaction', async () => {
+  const userId = new mongoose.Types.ObjectId();
+  const txnId = new mongoose.Types.ObjectId();
+  const categoryId = new mongoose.Types.ObjectId().toString();
+  const txn = { _id: txnId, userId, amount: 250, date: new Date(), rawDescription: 'Swiggy payout', source: 'swiggy' };
+  const category = { _id: categoryId, name: 'Food delivery', type: 'income' };
+
+  llm.chatJSON = async () =>
+    JSON.stringify({ categoryId, confidence: 0.87, reasoning: 'Payout from a food delivery platform.' });
+
+  const task = await categorizationAgent(txn, [category]);
+
+  assert.equal(task.type, 'categorize');
+  assert.equal(task.status, 'proposed');
+  assert.deepEqual(task.inputRefs, [txnId.toString()]);
+  assert.equal(task.proposedChange.categoryId, categoryId);
+  assert.equal(task.proposedChange.confidence, 0.87);
+});
+
+test('categorizationAgent returns null when the LLM names a category never offered to it', async () => {
+  const userId = new mongoose.Types.ObjectId();
+  const txnId = new mongoose.Types.ObjectId();
+  const realCategoryId = new mongoose.Types.ObjectId().toString();
+  const hallucinatedCategoryId = new mongoose.Types.ObjectId().toString();
+  const txn = { _id: txnId, userId, amount: 250, date: new Date(), rawDescription: 'Swiggy payout', source: 'swiggy' };
+  const category = { _id: realCategoryId, name: 'Food delivery', type: 'income' };
+
+  llm.chatJSON = async () =>
+    JSON.stringify({ categoryId: hallucinatedCategoryId, confidence: 0.9, reasoning: 'Looks like a payout.' });
+
+  const task = await categorizationAgent(txn, [category]);
+
+  assert.equal(task, null);
+});
+
+test('categorizationAgent returns null when the LLM call fails', async () => {
+  const userId = new mongoose.Types.ObjectId();
+  const txnId = new mongoose.Types.ObjectId();
+  const txn = { _id: txnId, userId, amount: 250, date: new Date(), rawDescription: 'Swiggy payout', source: 'swiggy' };
+  const category = { _id: new mongoose.Types.ObjectId().toString(), name: 'Food delivery', type: 'income' };
+
+  llm.chatJSON = async () => {
+    throw new Error('simulated Gemini outage');
+  };
+
+  const task = await categorizationAgent(txn, [category]);
+
+  assert.equal(task, null);
 });
