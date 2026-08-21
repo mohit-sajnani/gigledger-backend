@@ -9,7 +9,7 @@ const errorHandler = require('./middleware/errorHandler');
 const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: process.env.CLIENT_ORIGIN }));
+app.use(cors());
 if (process.env.NODE_ENV !== 'test') app.use(morgan('dev'));
 app.use(express.json());
 
