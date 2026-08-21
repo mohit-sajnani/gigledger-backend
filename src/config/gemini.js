@@ -8,7 +8,7 @@ const client = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
  * it. Every LLM call in the agentic layer goes through here — one place to
  * keep the cost/latency guardrails consistent.
  */
-async function chatJSON({ system, user, maxTokens }) {
+async function chatJSON({ system, user, maxTokens, imageParts }) {
   const model = client.getGenerativeModel({
     model: process.env.GEMINI_MODEL || 'gemini-flash-lite-latest',
     systemInstruction: system,
@@ -22,9 +22,11 @@ async function chatJSON({ system, user, maxTokens }) {
   const timeoutMs = parseInt(process.env.GEMINI_TIMEOUT_MS, 10) || 15000;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+  const parts = [{ text: user }, ...(imageParts || [])];
+
   try {
     const result = await model.generateContent(
-      { contents: [{ role: 'user', parts: [{ text: user }] }] },
+      { contents: [{ role: 'user', parts }] },
       { signal: controller.signal },
     );
     return result.response.text();
