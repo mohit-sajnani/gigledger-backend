@@ -2,7 +2,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { query, validationResult } = require('express-validator');
 const { protect } = require('../middleware/auth.middleware');
-const { getTaxEstimate, searchTaxRules } = require('../controllers/tax.controller');
+const { getTaxEstimate, searchTaxRules, exportTaxEstimate } = require('../controllers/tax.controller');
 
 const router = express.Router();
 
@@ -45,6 +45,17 @@ router.get(
   ],
   checkValidation,
   getTaxEstimate,
+);
+
+router.get(
+  '/export',
+  protect,
+  [
+    query('period').notEmpty().matches(/^Q[1-4]-\d{4}-\d{2}$/).withMessage('period must look like Q2-2024-25'),
+    query('format').isIn(['pdf', 'excel']).withMessage('format must be pdf or excel'),
+  ],
+  checkValidation,
+  exportTaxEstimate,
 );
 
 router.get(

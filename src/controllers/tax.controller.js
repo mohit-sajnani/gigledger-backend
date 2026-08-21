@@ -1,6 +1,7 @@
 const TaxEstimate = require('../models/TaxEstimate');
 const taxService = require('../services/tax.service');
 const rag = require('../services/rag.service');
+const { streamEstimatePdf, streamEstimateExcel } = require('../services/taxExport.service');
 const logger = require('../utils/logger');
 const asyncHandler = require('../utils/asyncHandler');
 
@@ -167,4 +168,35 @@ const searchTaxRules = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: { items }, message: '' });
 });
 
-module.exports = { getTaxEstimate, searchTaxRules };
+/**
+ * GET /api/tax/export — downloads an already-computed estimate as PDF or
+ * Excel. Never computes a fresh estimate itself: 404s if the caller hasn't
+ * run GET /api/tax/estimate for this period yet, so the frontend should only
+ * show the download buttons once that call has succeeded.
+ */
+const exportTaxEstimate = asyncHandler(async (req, res) => {
+  const { period, format } = req.query;
+
+  const estimate = await TaxEstimate.findOne({ userId: req.userId, period });
+  if (!estimate) {
+    return res.status(404).json({
+      success: false,
+      message: `No tax estimate found for ${period} — compute one first via GET /api/tax/estimate`,
+      errors: [],
+    });
+  }
+
+  const filenameBase = `gigledger-tax-estimate-${period}`;
+
+  if (format === 'pdf') {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}.pdf"`);
+    return streamEstimatePdf(estimate, res);
+  }
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}.xlsx"`);
+  return streamEstimateExcel(estimate, res);
+});
+
+module.exports = { getTaxEstimate, searchTaxRules, exportTaxEstimate };

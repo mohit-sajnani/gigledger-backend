@@ -23,6 +23,7 @@ app.use('/api/transactions', require('./routes/transaction.routes'));
 app.use('/api/agent', require('./routes/agent.routes'));
 app.use('/api/tax', require('./routes/tax.routes'));
 app.use('/api/receipts', require('./routes/receipt.routes'));
+app.use('/api/deadlines', require('./routes/deadline.routes'));
 
 app.use(notFound);
 app.use(errorHandler);
