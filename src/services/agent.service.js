@@ -3,6 +3,7 @@ const Transaction = require('../models/Transaction');
 const Category = require('../models/Category');
 const AgentTask = require('../models/AgentTask');
 const AuditLog = require('../models/AuditLog');
+const Deadline = require('../models/Deadline');
 const llm = require('../config/gemini');
 const logger = require('../utils/logger');
 
@@ -171,6 +172,38 @@ async function applyApprovedTask(task, session) {
   if (task.status !== 'proposed') {
     throw new Error(`applyApprovedTask called on a task with status "${task.status}"`);
   }
+
+  // Acknowledging a deadline notification doesn't touch a Transaction — the
+  // deadline itself was already marked notified when the task was proposed.
+  // We still write an AuditLog entry so every approved task leaves a trail.
+  if (task.type === 'deadline_check') {
+    const deadline = await Deadline.findOne({
+      _id: task.proposedChange.deadlineId,
+      userId: task.userId,
+    }).session(session);
+
+    if (!deadline) {
+      throw new Error('Deadline referenced by this task no longer exists');
+    }
+
+    const [auditLog] = await AuditLog.create(
+      [
+        {
+          userId: task.userId,
+          actionType: 'deadline.acknowledge',
+          agentTaskId: task._id,
+          before: { acknowledged: false },
+          after: { acknowledged: true },
+          approvedBy: 'user',
+          targetModel: 'Deadline',
+          targetId: task.proposedChange.deadlineId,
+        },
+      ],
+      { session },
+    );
+    return { transaction: null, auditLog };
+  }
+
   if (task.type !== 'categorize') {
     throw new Error(`applyApprovedTask does not support task type "${task.type}"`);
   }
